@@ -1,0 +1,8 @@
+build/
+dist/
+*.spec
+apk_extracted/
+__pycache__/
+*.pyc
+.claude
+.fewword
