@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-Samsung MobileLink replacement for Windows
+Samsung MobileLink replacement for Windows — CLI tool
 
-Hasznalat:
-  1. Csatlakozz a kamera WiFi-jehez (pl. "SEC_DSC_XXXXXXXX" SSID)
-  2. Futtasd: python samsung_link.py discover
-  3. Futtasd: python samsung_link.py browse
-  4. Futtasd: python samsung_link.py download --dest C:/Kepek
+Usage:
+  1. Connect to the camera's WiFi (SSID: SEC_DSC_XXXXXXXX or join same network)
+  2. Run: python samsung_link.py discover
+  3. Run: python samsung_link.py browse
+  4. Run: python samsung_link.py download --dest C:/Photos
 """
 
 import sys
@@ -19,14 +18,12 @@ import socket
 import time
 import urllib.request
 import xml.etree.ElementTree as ET
-import sys
 import os
 import argparse
-from textwrap import indent
 
 SSDP_ADDR = "239.255.255.250"
 SSDP_PORT = 1900
-SSDP_TIMEOUT = 5  # másodperc
+SSDP_TIMEOUT = 5
 
 SSDP_MSEARCH = (
     "M-SEARCH * HTTP/1.1\r\n"
@@ -37,15 +34,22 @@ SSDP_MSEARCH = (
     "\r\n"
 )
 
-NS = {
-    "upnp": "urn:schemas-upnp-org:metadata-1-5",
-    "dc": "http://purl.org/dc/elements/1.1/",
-    "didl": "urn:schemas-upnp-org:metadata-1-5",
+MIME_EXT = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/gif": ".gif",
+    "image/bmp": ".bmp",
+    "video/mp4": ".mp4",
+    "video/mpeg": ".mpg",
+    "video/x-msvideo": ".avi",
+    "video/quicktime": ".mov",
+    "video/3gpp": ".3gp",
 }
 
 
 def get_local_ips():
-    """Az osszes helyi IP cim lekerese (Hyper-V/loopback kihagyasaval)."""
+    """Return local IPv4 addresses, skipping loopback and virtual adapters (172.x)."""
     ips = []
     try:
         for info in socket.getaddrinfo(socket.gethostname(), None):
@@ -56,16 +60,13 @@ def get_local_ips():
                 ips.append(ip)
     except Exception:
         pass
-    # Fallback
-    if not ips:
-        ips = ["0.0.0.0"]
-    return ips
+    return ips or ["0.0.0.0"]
 
 
 def ssdp_discover(timeout=SSDP_TIMEOUT):
-    """SSDP M-SEARCH kuldese minden lokalis interfeszen."""
+    """Send SSDP M-SEARCH on all local interfaces and collect responses."""
     local_ips = get_local_ips()
-    print(f"[SSDP] Helyi interfeszek: {local_ips}")
+    print(f"[SSDP] Local interfaces: {local_ips}")
 
     devices = []
     seen_locations = set()
@@ -96,7 +97,7 @@ def ssdp_discover(timeout=SSDP_TIMEOUT):
                             server = line.split(":", 1)[1].strip()
                     if location and location not in seen_locations:
                         seen_locations.add(location)
-                        print(f"    Talalt: {addr[0]}  {server}")
+                        print(f"    Found: {addr[0]}  {server}")
                         devices.append({"ip": addr[0], "location": location, "server": server})
                 except socket.timeout:
                     break
@@ -108,15 +109,12 @@ def ssdp_discover(timeout=SSDP_TIMEOUT):
 
 
 def get_device_description(location):
-    """Letölti és parse-olja az UPnP device description XML-t."""
+    """Fetch and parse a UPnP device description XML."""
     try:
         with urllib.request.urlopen(location, timeout=5) as r:
             xml_data = r.read()
         root = ET.fromstring(xml_data)
-        # Namespace eltávolítása az egyszerűség kedvéért
-        ns = ""
-        if root.tag.startswith("{"):
-            ns = root.tag.split("}")[0] + "}"
+        ns = root.tag.split("}")[0] + "}" if root.tag.startswith("{") else ""
 
         def find(elem, tag):
             return elem.find(f"{ns}{tag}")
@@ -139,12 +137,11 @@ def get_device_description(location):
         }
 
         service_list = find(device, "serviceList")
-        if service_list:
+        if service_list is not None:
             for svc in service_list:
                 svc_type = findtext(svc, "serviceType")
                 control_url = findtext(svc, "controlURL")
                 if control_url:
-                    # Relatív URL -> abszolút
                     base = "/".join(location.split("/")[:3])
                     if not control_url.startswith("http"):
                         control_url = base + "/" + control_url.lstrip("/")
@@ -154,12 +151,12 @@ def get_device_description(location):
                 })
         return info
     except Exception as e:
-        print(f"  [hiba] Leírás letöltése sikertelen: {e}")
+        print(f"  [error] Failed to fetch device description: {e}")
         return None
 
 
 def find_content_directory(device_info):
-    """Megkeresi a ContentDirectory service control URL-t."""
+    """Return the ContentDirectory service control URL, or None."""
     for svc in device_info.get("services", []):
         if "ContentDirectory" in svc.get("type", ""):
             return svc["controlURL"]
@@ -167,7 +164,7 @@ def find_content_directory(device_info):
 
 
 def soap_browse(control_url, object_id="0", starting_index=0, requested_count=200):
-    """UPnP ContentDirectory Browse SOAP kérés."""
+    """Send a UPnP ContentDirectory Browse SOAP request."""
     body = f"""<?xml version="1.0" encoding="utf-8"?>
 <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"
             s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
@@ -195,33 +192,23 @@ def soap_browse(control_url, object_id="0", starting_index=0, requested_count=20
         with urllib.request.urlopen(req, timeout=10) as r:
             return r.read().decode("utf-8", errors="replace")
     except Exception as e:
-        print(f"  [hiba] SOAP Browse: {e}")
+        print(f"  [error] SOAP Browse: {e}")
         return None
 
 
 def parse_didl(didl_xml):
-    """DIDL-Lite XML parse-olása -> fájl lista."""
+    """Parse DIDL-Lite XML and return a list of file/container dicts."""
     items = []
     try:
         root = ET.fromstring(didl_xml)
     except ET.ParseError as e:
-        print(f"  [warn] DIDL parse hiba: {e}")
+        print(f"  [warn] DIDL parse error: {e}")
         return items
 
-    ns = {
-        "d": "urn:schemas-upnp-org:metadata-1-5",
-        "dc": "http://purl.org/dc/elements/1.1/",
-        "upnp": "urn:schemas-upnp-org:metadata-1-5",
-    }
-
-    # Namespace-független keresés
     for elem in root.iter():
         tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
         if tag == "item":
-            title = ""
-            url = ""
-            size = 0
-            mime = ""
+            title, url, size, mime = "", "", 0, ""
             for child in elem:
                 ctag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
                 if ctag == "title":
@@ -229,12 +216,13 @@ def parse_didl(didl_xml):
                 elif ctag == "res":
                     url = child.text or ""
                     size = int(child.attrib.get("size", 0))
-                    mime = child.attrib.get("protocolInfo", "").split(":")[2] if ":" in child.attrib.get("protocolInfo", "") else ""
+                    pi = child.attrib.get("protocolInfo", "")
+                    mime = pi.split(":")[2] if pi.count(":") >= 2 else ""
             if url:
                 items.append({"title": title, "url": url, "size": size, "mime": mime})
         elif tag == "container":
-            title = ""
             cid = elem.attrib.get("id", "")
+            title = ""
             for child in elem:
                 ctag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
                 if ctag == "title":
@@ -244,7 +232,7 @@ def parse_didl(didl_xml):
 
 
 def browse_all(control_url, object_id="0", depth=0):
-    """Rekurzívan bejárja a kamera fájlrendszerét."""
+    """Recursively browse the camera's content directory."""
     indent_str = "  " * depth
     print(f"{indent_str}[Browse] ObjectID={object_id}")
 
@@ -252,65 +240,44 @@ def browse_all(control_url, object_id="0", depth=0):
     if not resp:
         return []
 
-    # Kiveszi a Result XML-t
     result_match = None
     try:
         envelope = ET.fromstring(resp)
         for elem in envelope.iter():
-            tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
-            if tag == "Result":
+            if elem.tag.split("}")[-1] == "Result":
                 result_match = elem.text
                 break
     except ET.ParseError:
         pass
 
     if not result_match:
-        print(f"{indent_str}  [warn] Ures eredmeny")
+        print(f"{indent_str}  [warn] Empty result")
         return []
 
-    items = parse_didl(result_match)
     all_files = []
-    for item in items:
+    for item in parse_didl(result_match):
         if item.get("type") == "container":
-            print(f"{indent_str}  [Mappa] {item['title']}  (id={item.get('id','')})")
-            sub = browse_all(control_url, item["id"], depth + 1)
-            all_files.extend(sub)
+            print(f"{indent_str}  [Folder] {item['title']}  (id={item.get('id','')})")
+            all_files.extend(browse_all(control_url, item["id"], depth + 1))
         else:
             size_kb = item["size"] // 1024 if item["size"] else 0
-            print(f"{indent_str}  [Fajl] {item['title']}  ({size_kb} KB)  {item['mime']}")
+            print(f"{indent_str}  [File] {item['title']}  ({size_kb} KB)  {item['mime']}")
             all_files.append(item)
     return all_files
 
 
-MIME_EXT = {
-    "image/jpeg": ".jpg",
-    "image/jpg": ".jpg",
-    "image/png": ".png",
-    "image/gif": ".gif",
-    "image/bmp": ".bmp",
-    "video/mp4": ".mp4",
-    "video/mpeg": ".mpg",
-    "video/x-msvideo": ".avi",
-    "video/quicktime": ".mov",
-    "video/3gpp": ".3gp",
-}
-
-
 def ensure_extension(title, mime, url):
-    """Kiterjesztes hozzaadasa ha nincs."""
-    # Ha mar van kiterjesztes, nem csinalunk semmit
+    """Add a file extension based on MIME type if the title has none."""
     if "." in title.split("/")[-1]:
         return title
-    # MIME alapjan
     ext = MIME_EXT.get(mime.lower(), "")
-    # URL-bol is megprobaljuk
     if not ext and "." in url.split("?")[0].split("/")[-1]:
         ext = "." + url.split("?")[0].split("/")[-1].rsplit(".", 1)[-1].lower()
     return title + ext if ext else title
 
 
 def download_files(files, dest_dir):
-    """Letölti a fájlokat a megadott mappába."""
+    """Download a list of files to a local directory."""
     os.makedirs(dest_dir, exist_ok=True)
     total = len(files)
     for i, f in enumerate(files, 1):
@@ -318,78 +285,77 @@ def download_files(files, dest_dir):
         fname = ensure_extension(raw_title, f.get("mime", ""), f.get("url", ""))
         fpath = os.path.join(dest_dir, fname)
         if os.path.exists(fpath):
-            print(f"  [{i}/{total}] Mar letezik: {fname}")
+            print(f"  [{i}/{total}] Already exists: {fname}")
             continue
-        print(f"  [{i}/{total}] Letoltes: {fname} ...")
+        print(f"  [{i}/{total}] Downloading: {fname} ...")
         try:
             urllib.request.urlretrieve(f["url"], fpath)
             size_kb = os.path.getsize(fpath) // 1024
             print(f"    OK -> {fpath}  ({size_kb} KB)")
         except Exception as e:
-            print(f"    [hiba] {e}")
-
-
-def cmd_discover(args):
-    devices = ssdp_discover()
-    if not devices:
-        print("\nNem talalt eszkozokat.")
-        print("Ellenorizd, hogy:")
-        print("  1. A kamera WiFi hotspotjara vagy csatlakozva")
-        print("  2. A kamera 'Remote Shooting' vagy 'MobileLink' modban van")
-        return
-
-    print(f"\n{len(devices)} eszkoz talalt:")
-    for d in devices:
-        desc = get_device_description(d["location"])
-        if desc:
-            print(f"\n  Nev: {desc['friendlyName']}")
-            print(f"  Gyarto: {desc['manufacturer']}")
-            print(f"  Model: {desc['modelName']} {desc['modelNumber']}")
-            print(f"  IP: {d['ip']}")
-            print(f"  Services:")
-            for svc in desc["services"]:
-                print(f"    - {svc['type']}")
-                print(f"      {svc['controlURL']}")
+            print(f"    [error] {e}")
 
 
 def find_camera_device(devices):
-    """Megkeresi a Samsung kamerát az eszközök között."""
+    """Find the Samsung camera among discovered UPnP devices."""
     for d in devices:
         desc = get_device_description(d["location"])
         if not desc:
             continue
         name = desc.get("friendlyName", "").lower()
         manufacturer = desc.get("manufacturer", "").lower()
-        # Samsung kamera jellemzoi: "[Camera]" a nevben, vagy Samsung + MediaServer
         if "camera" in name or ("samsung" in manufacturer and find_content_directory(desc)):
             return desc, d
     return None, None
 
 
+def cmd_discover(args):
+    devices = ssdp_discover()
+    if not devices:
+        print("\nNo devices found.")
+        print("Make sure:")
+        print("  1. The camera WiFi is on and connected to the same network")
+        print("  2. The camera is in AutoShare or MobileLink mode")
+        return
+
+    print(f"\n{len(devices)} device(s) found:")
+    for d in devices:
+        desc = get_device_description(d["location"])
+        if desc:
+            print(f"\n  Name:         {desc['friendlyName']}")
+            print(f"  Manufacturer: {desc['manufacturer']}")
+            print(f"  Model:        {desc['modelName']} {desc['modelNumber']}")
+            print(f"  IP:           {d['ip']}")
+            print(f"  Services:")
+            for svc in desc["services"]:
+                print(f"    - {svc['type']}")
+                print(f"      {svc['controlURL']}")
+
+
 def cmd_browse(args):
     devices = ssdp_discover(timeout=6)
     if not devices:
-        print("Nem talalt eszkozokat.")
-        print("Tipp: py samsung_link.py manual 192.168.0.225")
-        return
+        print("No devices found.")
+        print("Tip: try  python samsung_link.py manual <camera-ip>")
+        return None
 
     desc, device = find_camera_device(devices)
     if not desc:
-        print("Nem talalt Samsung kamera eszkozot a halozaton.")
-        print("Talalt eszkozok:")
+        print("No Samsung camera found on the network.")
+        print("Devices found:")
         for d in devices:
-            print(f"  {d['ip']} - {d.get('server','?')}")
-        return
+            print(f"  {d['ip']} - {d.get('server', '?')}")
+        return None
 
-    print(f"Kapcsolodva: {desc['friendlyName']} ({desc['modelName']}) @ {device['ip']}")
+    print(f"Connected: {desc['friendlyName']} ({desc['modelName']}) @ {device['ip']}")
     ctrl_url = find_content_directory(desc)
     if not ctrl_url:
-        print("ContentDirectory service nem talalhato!")
-        return
+        print("ContentDirectory service not found.")
+        return None
 
     print(f"ContentDirectory URL: {ctrl_url}\n")
     files = browse_all(ctrl_url, "0")
-    print(f"\nOsszesen {len(files)} fajl talalt.")
+    print(f"\nTotal: {len(files)} file(s) found.")
     return files, ctrl_url, desc
 
 
@@ -399,51 +365,50 @@ def cmd_download(args):
         return
     files, ctrl_url, desc = result
     if not files:
-        print("Nincs letoltendo fajl.")
+        print("No files to download.")
         return
 
     dest = args.dest or os.path.join(os.path.expanduser("~"), "Pictures", "SamsungCamera")
-    print(f"\nLetoltes ide: {dest}")
+    print(f"\nDownloading to: {dest}")
     download_files(files, dest)
-    print("\nKesz!")
+    print("\nDone!")
 
 
 def cmd_manual(args):
-    """Kezi mod: megadott IP-re csatlakozik."""
+    """Connect manually by IP address."""
     ip = args.ip
-    port = args.port or 52235
-    # Probaljuk a tipikus Samsung camera description URL-t
     candidates = [
-        f"http://{ip}:{port}/description.xml",
-        f"http://{ip}:{port}/rootDesc.xml",
+        f"http://{ip}:7676/smp_6_",
         f"http://{ip}/description.xml",
         f"http://{ip}/rootDesc.xml",
         f"http://{ip}:49152/description.xml",
         f"http://{ip}:49153/description.xml",
         f"http://{ip}:8080/description.xml",
     ]
+    if args.port:
+        candidates.insert(0, f"http://{ip}:{args.port}/description.xml")
 
     desc = None
     for url in candidates:
-        print(f"Probalok: {url}")
+        print(f"Trying: {url}")
         desc = get_device_description(url)
         if desc:
-            print(f"  Siker! {desc['friendlyName']}")
+            print(f"  Success! {desc['friendlyName']}")
             break
 
     if not desc:
-        print("Nem sikerult elerni a kamera leirasat.")
-        print("Csatlakozz a kamera WiFi-jere, majd probalj SSDP discovery-t:")
+        print("Could not reach the camera description.")
+        print("Make sure you are connected to the camera's WiFi, then try:")
         print("  python samsung_link.py discover")
         return
 
     ctrl_url = find_content_directory(desc)
     if not ctrl_url:
-        print("ContentDirectory nem talalhato.")
+        print("ContentDirectory service not found.")
         return
 
     files = browse_all(ctrl_url, "0")
-    print(f"\nOsszesen {len(files)} fajl.")
+    print(f"\nTotal: {len(files)} file(s).")
 
     if args.dest and files:
         download_files(files, args.dest)
@@ -451,20 +416,20 @@ def cmd_manual(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Samsung kamera MobileLink kliens Windowsra"
+        description="Samsung WiFi camera downloader — CLI"
     )
     sub = parser.add_subparsers(dest="cmd")
 
-    sub.add_parser("discover", help="SSDP felfedezes - eszkozok listazasa")
-    sub.add_parser("browse", help="Fajlok bongeszetse a kameran")
+    sub.add_parser("discover", help="SSDP discovery — list all UPnP devices on the network")
+    sub.add_parser("browse",   help="Browse files on the camera without downloading")
 
-    dl = sub.add_parser("download", help="Osszes fajl letoltese")
-    dl.add_argument("--dest", default=None, help="Celmappa (alapert.: ~/Pictures/SamsungCamera)")
+    dl = sub.add_parser("download", help="Download all files from the camera")
+    dl.add_argument("--dest", default=None, help="Destination folder (default: ~/Pictures/SamsungCamera)")
 
-    manual = sub.add_parser("manual", help="Kezi IP cim megadasa")
-    manual.add_argument("ip", help="Kamera IP-je (pl. 192.168.100.1)")
-    manual.add_argument("--port", type=int, default=None, help="Port (alapert.: automatikus)")
-    manual.add_argument("--dest", default=None, help="Letoltesi mappa")
+    manual = sub.add_parser("manual", help="Connect by IP address (if auto-discovery fails)")
+    manual.add_argument("ip",          help="Camera IP address (e.g. 192.168.0.225)")
+    manual.add_argument("--port",      type=int, default=None, help="Port (default: auto-detect)")
+    manual.add_argument("--dest",      default=None, help="Destination folder")
 
     args = parser.parse_args()
 
@@ -478,8 +443,8 @@ if __name__ == "__main__":
         cmd_manual(args)
     else:
         parser.print_help()
-        print("\nGyors start:")
-        print("  1. Csatlakozz a kamera WiFi-jere (SSID: SEC_DSC_XXXXXXXX)")
-        print("  2. py samsung_link.py discover")
-        print("  3. py samsung_link.py browse")
-        print("  4. py samsung_link.py download --dest C:/Kepek")
+        print("\nQuick start:")
+        print("  1. Connect your PC to the same WiFi as the camera")
+        print("  2. python samsung_link.py discover")
+        print("  3. python samsung_link.py browse")
+        print("  4. python samsung_link.py download --dest C:/Photos")
