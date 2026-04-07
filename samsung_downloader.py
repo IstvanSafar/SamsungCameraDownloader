@@ -226,19 +226,19 @@ class App(tk.Tk):
         self._files = []
         self._running = False
 
-        # Kamera sor
+        # Camera row
         cam_frame = tk.Frame(self)
         cam_frame.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 8))
-        tk.Label(cam_frame, text="Kamera:", width=8, anchor="w").pack(side="left")
-        self.lbl_camera = tk.Label(cam_frame, text="Keresés...", fg="gray", anchor="w", width=40)
+        tk.Label(cam_frame, text="Camera:", width=8, anchor="w").pack(side="left")
+        self.lbl_camera = tk.Label(cam_frame, text="Searching...", fg="gray", anchor="w", width=40)
         self.lbl_camera.pack(side="left")
-        self.btn_search = tk.Button(cam_frame, text="Keresés", command=self._search)
+        self.btn_search = tk.Button(cam_frame, text="Search", command=self._search)
         self.btn_search.pack(side="right")
 
-        # TargetFolder
+        # Destination folder
         dest_frame = tk.Frame(self)
         dest_frame.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 8))
-        tk.Label(dest_frame, text="Mappa:", width=8, anchor="w").pack(side="left")
+        tk.Label(dest_frame, text="Folder:", width=8, anchor="w").pack(side="left")
         self.dest_var = tk.StringVar(value=os.path.join(os.path.expanduser("~"), "Pictures", "SamsungCamera"))
         tk.Entry(dest_frame, textvariable=self.dest_var, width=38).pack(side="left")
         tk.Button(dest_frame, text="...", command=self._browse_dest).pack(side="left", padx=4)
@@ -281,7 +281,7 @@ class App(tk.Tk):
 
     def _search(self):
         self.btn_search.configure(state="disabled")
-        self.lbl_camera.configure(text="Search...", fg="gray")
+        self.lbl_camera.configure(text="Searching...", fg="gray")
         self.btn_download.configure(state="disabled")
         self.btn_new.configure(state="disabled")
         self._log("Camera search on network...")
