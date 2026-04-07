@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-import sys, os, socket, time, threading, urllib.request, xml.etree.ElementTree as ET
+import sys, os, socket, time, threading, urllib.request, xml.etree.ElementTree as ET, json
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-# --- UPnP/DLNA logics(from samsung_link.py) ---
+# --- UPnP/DLNA logic ---
 
 SSDP_ADDR = "239.255.255.250"
 SSDP_PORT = 1900
@@ -13,12 +13,34 @@ MIME_EXT = {
     "video/quicktime": ".mov", "video/3gpp": ".3gp",
 }
 
+_CONFIG_DEFAULTS = {
+    "skip_ip_prefixes": ["127.", "172.", "169.254."],
+    "ssdp_timeout": 6,
+}
+
+def load_config():
+    cfg = dict(_CONFIG_DEFAULTS)
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+    try:
+        with open(config_path) as f:
+            cfg.update(json.load(f))
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+    return cfg
+
+CONFIG = load_config()
+
 def get_local_ips():
+    skip = CONFIG.get("skip_ip_prefixes", _CONFIG_DEFAULTS["skip_ip_prefixes"])
     ips = []
     try:
         for info in socket.getaddrinfo(socket.gethostname(), None):
             ip = info[4][0]
-            if ip.startswith("127.") or ip.startswith("172.") or ":" in ip:
+            if ":" in ip:
+                continue
+            if any(ip.startswith(p) for p in skip):
                 continue
             if ip not in ips:
                 ips.append(ip)
@@ -26,7 +48,9 @@ def get_local_ips():
         pass
     return ips or ["0.0.0.0"]
 
-def ssdp_discover(timeout=6):
+def ssdp_discover(timeout=None):
+    if timeout is None:
+        timeout = CONFIG.get("ssdp_timeout", 6)
     msg = (
         "M-SEARCH * HTTP/1.1\r\n"
         f"HOST: {SSDP_ADDR}:{SSDP_PORT}\r\n"

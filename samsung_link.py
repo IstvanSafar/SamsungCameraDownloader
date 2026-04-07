@@ -20,10 +20,31 @@ import urllib.request
 import xml.etree.ElementTree as ET
 import os
 import argparse
+import json
 
 SSDP_ADDR = "239.255.255.250"
 SSDP_PORT = 1900
-SSDP_TIMEOUT = 5
+
+_CONFIG_DEFAULTS = {
+    "skip_ip_prefixes": ["127.", "172.", "169.254."],
+    "ssdp_timeout": 6,
+}
+
+def load_config():
+    """Load config.json from the same directory as this script, falling back to defaults."""
+    cfg = dict(_CONFIG_DEFAULTS)
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+    try:
+        with open(config_path) as f:
+            cfg.update(json.load(f))
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"[warn] Could not read config.json: {e}")
+    return cfg
+
+CONFIG = load_config()
+SSDP_TIMEOUT = CONFIG["ssdp_timeout"]
 
 SSDP_MSEARCH = (
     "M-SEARCH * HTTP/1.1\r\n"
@@ -49,12 +70,15 @@ MIME_EXT = {
 
 
 def get_local_ips():
-    """Return local IPv4 addresses, skipping loopback and virtual adapters (172.x)."""
+    """Return local IPv4 addresses, skipping prefixes listed in config.json."""
+    skip = CONFIG.get("skip_ip_prefixes", _CONFIG_DEFAULTS["skip_ip_prefixes"])
     ips = []
     try:
         for info in socket.getaddrinfo(socket.gethostname(), None):
             ip = info[4][0]
-            if ip.startswith("127.") or ip.startswith("172.") or ":" in ip:
+            if ":" in ip:
+                continue
+            if any(ip.startswith(p) for p in skip):
                 continue
             if ip not in ips:
                 ips.append(ip)
