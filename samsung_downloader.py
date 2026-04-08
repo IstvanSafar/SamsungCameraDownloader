@@ -161,17 +161,26 @@ def parse_didl(didl_xml):
     for elem in root.iter():
         tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
         if tag == "item":
-            title, url, size, mime = "", "", 0, ""
+            title = ""
+            res_entries = []
             for child in elem:
                 ct = child.tag.split("}")[-1] if "}" in child.tag else child.tag
-                if ct == "title": title = child.text or ""
+                if ct == "title":
+                    title = child.text or ""
                 elif ct == "res":
-                    url = child.text or ""
-                    size = int(child.attrib.get("size", 0))
+                    res_url = child.text or ""
+                    if not res_url:
+                        continue
+                    res_size = int(child.attrib.get("size", 0))
                     pi = child.attrib.get("protocolInfo", "")
-                    mime = pi.split(":")[2] if pi.count(":") >= 2 else ""
-            if url:
-                items.append({"title": title, "url": url, "size": size, "mime": mime})
+                    res_mime = pi.split(":")[2] if pi.count(":") >= 2 else ""
+                    res_entries.append({"url": res_url, "size": res_size, "mime": res_mime, "pi": pi})
+            if res_entries:
+                _THUMB_MARKERS = ("JPEG_TN", "JPEG_SM", "PNG_TN", "PNG_SM", "_TN", "_SM")
+                full_res = [r for r in res_entries if not any(m in r["pi"] for m in _THUMB_MARKERS)]
+                candidates = full_res if full_res else res_entries
+                best = max(candidates, key=lambda r: r["size"])
+                items.append({"title": title, "url": best["url"], "size": best["size"], "mime": best["mime"]})
         elif tag == "container":
             cid, title = elem.attrib.get("id", ""), ""
             for child in elem:
